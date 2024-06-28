@@ -2,10 +2,25 @@ const express = require("express");
 const http = require("http");
 const socketIo = require("socket.io");
 const cors = require("cors");
-
+const bodypareser = require("body-parser");
+const mongoose = require("mongoose");
+const usersModel = require("./models/users");
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server);
+
+const crypto = require("crypto");
+const jwt = require("jsonwebtoken");
+
+const SECRET_KEY = crypto.randomBytes(64).toString("hex");
+
+mongoose
+  .connect("mongodb://localhost:27017/testchatjwt", {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+  })
+  .then(() => console.log("connected to the database"))
+  .catch((err) => console.log("Could not to connect", err));
 
 app.use(
   cors({
@@ -13,12 +28,34 @@ app.use(
   })
 );
 
-app.get("/chat", (req, res) => {
+app.use(bodypareser.json());
+
+const user = { id: 1, username: "user", password: "password" };
+
+app.post("/users", (req, res) => {
+  const { username, password } = req.body;
   try {
-    res.status(200).json("OK");
+    const token = jwt.sign({ id: user.id, username: username }, SECRET_KEY, {
+      expiresIn: "1h",
+    });
+    res.json({ token });
   } catch (e) {
-    res.status(500).json({ message: "Error", e: e.message });
+    res.status(401).json({ message: "invalid credentails" });
   }
+});
+
+io.use((socket, next) => {
+  const token = socket.handshake.auth.token;
+  if (!token) return next(new Error("authentication error"));
+
+  jwt.verify(token, SECRET_KEY, (err, decoded) => {
+    if (err) {
+      return next(new Error("authentication error"));
+    }
+    console.log(token)
+    socket.decoded = decoded;
+    next();
+  });
 });
 
 let connectedUsers = 0;
@@ -45,7 +82,7 @@ io.on("connection", (socket) => {
   // Поделючение к компнате
   socket.on("join", (room) => {
     socket.join(room);
-    io.to(room).emit("users", connectedUsers);
+    io.to(room).emit("users", connectedUsers, "Ты в комнате");
   });
 
   // Подключённые пользователи
@@ -57,19 +94,6 @@ io.on("connection", (socket) => {
     console.log("user disconnected");
     io.except("some room").emit("hello", connectedUsers);
   });
-
-  // Транслировать событие пользователям в комнате
-
-  // Транслировать событие пользователям вне комнаты
-  // io.except("some room").emit("hello", connectedUsers);
-
-  // Сообщение чата
-  // socket.on("chat message", (msg) => {
-  //   console.log("message: " + msg);
-  //   io.to("room1").emit("chat message", msg);
-  // });
-
-  socket.leave("some room");
 });
 
 server.on("error", (error) => {
@@ -77,6 +101,7 @@ server.on("error", (error) => {
 });
 
 const PORT = process.env.PORT || 3001;
+
 server.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
 });
